@@ -76,18 +76,20 @@ class GoveeLeakRuntime:
             self._route[(sensor.gateway_device, sensor.sno)] = sensor.device
 
         _LOGGER.info("Discovered %d Govee leak sensors", len(self.states))
-        self._start_iot(creds)
+        await self._async_start_iot(creds)
         self._cancel_reauth = async_track_time_interval(
             self.hass, self._async_reauth, REAUTH_INTERVAL
         )
 
-    def _start_iot(self, creds: GoveeCreds) -> None:
+    async def _async_start_iot(self, creds: GoveeCreds) -> None:
         self._iot = GoveeIotClient(
             creds,
             on_readings=self._handle_readings_threadsafe,
             on_connection=self._handle_connection_threadsafe,
         )
-        self._iot.start()
+        # Building the SSL context (load_default_certs / load_cert_chain) is
+        # blocking, so start the client in the executor.
+        await self.hass.async_add_executor_job(self._iot.start)
 
     async def _async_reauth(self, _now) -> None:
         """Refresh credentials and restart the IoT connection."""
@@ -101,7 +103,7 @@ class GoveeLeakRuntime:
         self._creds = creds
         if self._iot is not None:
             await self.hass.async_add_executor_job(self._iot.stop)
-        self._start_iot(creds)
+        await self._async_start_iot(creds)
         _LOGGER.debug("Govee credentials refreshed")
 
     # -- threadsafe bridges (called from the paho thread) ----------------- #
