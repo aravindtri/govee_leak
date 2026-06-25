@@ -6,7 +6,8 @@
   b2  sub-device index == deviceSettings.sno (0..9)
   b3  0x02 when this is a per-sensor data frame
   b5  battery percent
-  b13 leak state: 0x01 wet, 0x00 dry (mirrored at b16)
+  b13 leak state (older firmware only; unreliable, part of a rolling counter)
+  b16 leak state mirror: 0x01 wet, 0x00 dry (reliable across firmware versions)
   b19 XOR checksum of bytes 0..18
 """
 from __future__ import annotations
@@ -39,7 +40,8 @@ def decode_frame(b64: str) -> SensorReading | None:
         return None
     if b[3] != 0x02:
         return None
-    return SensorReading(sno=b[2], battery=b[5], leak=bool(b[13]))
+    # b16 is the reliable leak mirror; b13 only matches on older firmware.
+    return SensorReading(sno=b[2], battery=b[5], leak=bool(b[16]))
 
 
 def readings_from_message(msg: dict) -> tuple[str, list[SensorReading]] | None:
