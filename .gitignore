@@ -1,0 +1,9 @@
+.env
+captures/
+research/
+.venv/
+__pycache__/
+*.pyc
+*.p12
+*.crt
+*.key

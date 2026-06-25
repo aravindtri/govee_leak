@@ -1,0 +1,4 @@
+requests>=2.31
+paho-mqtt>=2.1
+cryptography>=42.0
+python-dotenv>=1.0

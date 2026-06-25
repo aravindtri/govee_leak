@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "GoveeLife Water Leak",
+        "description": "Sign in with your Govee Home account. Govee may email you a verification code on the next step.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "code": {
+        "title": "Email verification",
+        "description": "Govee emailed a verification code to your account. Enter it below to finish setup.",
+        "data": {
+          "code": "Verification code"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password.",
+      "invalid_code": "The verification code was invalid or has expired.",
+      "code_request_failed": "Could not request a verification code from Govee.",
+      "cannot_connect": "Failed to connect to Govee. Please try again."
+    },
+    "abort": {
+      "already_configured": "This Govee account is already configured."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "low_battery": {
+        "name": "Low battery"
+      }
+    },
+    "sensor": {
+      "battery": {
+        "name": "Battery"
+      }
+    }
+  }
+}
