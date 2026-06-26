@@ -6,13 +6,19 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
+from .api import GoveeAuthError, NeedsVerificationCode
 from .const import DOMAIN
 from .runtime import GoveeLeakRuntime
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.SENSOR,
+    Platform.BUTTON,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -23,7 +29,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         email=entry.data[CONF_EMAIL],
         password=entry.data[CONF_PASSWORD],
     )
-    await runtime.async_setup()
+    try:
+        await runtime.async_setup()
+    except NeedsVerificationCode as err:
+        # Govee wants a fresh emailed code; the user must re-authenticate.
+        raise ConfigEntryAuthFailed(
+            "Govee requires a new email verification code"
+        ) from err
+    except GoveeAuthError as err:
+        raise ConfigEntryAuthFailed(str(err)) from err
+    except Exception as err:  # noqa: BLE001
+        # Network blips, Govee 5xx, cert decode, etc. -> let HA retry later.
+        raise ConfigEntryNotReady(f"Could not connect to Govee: {err}") from err
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 

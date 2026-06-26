@@ -21,6 +21,12 @@ _LOGGER = logging.getLogger(__name__)
 # so a stale cert can't silently kill the stream.
 REAUTH_INTERVAL = timedelta(hours=12)
 
+# Watchdog: how often to check the stream and send a liveness poll.
+WATCHDOG_INTERVAL = timedelta(minutes=5)
+# If no inbound traffic for this long (even our own polls go unanswered) the
+# socket is considered dead and we force a full reconnect.
+STALE_AFTER = timedelta(minutes=15)
+
 
 @dataclass
 class SensorState:
@@ -53,6 +59,7 @@ class GoveeLeakRuntime:
         self._iot: GoveeIotClient | None = None
         self._creds: GoveeCreds | None = None
         self._cancel_reauth = None
+        self._cancel_watchdog = None
         # device id -> SensorState
         self.states: dict[str, SensorState] = {}
         # (gateway_device, sno) -> device id
@@ -80,6 +87,9 @@ class GoveeLeakRuntime:
         self._cancel_reauth = async_track_time_interval(
             self.hass, self._async_reauth, REAUTH_INTERVAL
         )
+        self._cancel_watchdog = async_track_time_interval(
+            self.hass, self._async_watchdog, WATCHDOG_INTERVAL
+        )
 
     async def _async_start_iot(self, creds: GoveeCreds) -> None:
         poll_topics = sorted(
@@ -99,20 +109,63 @@ class GoveeLeakRuntime:
         # blocking, so start the client in the executor.
         await self.hass.async_add_executor_job(self._iot.start)
 
-    async def _async_reauth(self, _now) -> None:
+    async def _async_reauth(self, _now=None) -> None:
         """Refresh credentials and restart the IoT connection."""
-        try:
-            creds = await self.hass.async_add_executor_job(
-                self._cloud.authenticate, None
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Govee periodic re-auth failed: %s", err)
-            return
-        self._creds = creds
+        await self._async_restart_iot(reauth=True)
+
+    async def _async_restart_iot(self, *, reauth: bool) -> None:
+        """Tear down and restart the IoT stream, optionally re-authenticating."""
+        if reauth or self._creds is None:
+            try:
+                creds = await self.hass.async_add_executor_job(
+                    self._cloud.authenticate, None
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Govee re-auth failed: %s", err)
+                self._mark_all_unavailable()
+                return
+            self._creds = creds
         if self._iot is not None:
             await self.hass.async_add_executor_job(self._iot.stop)
-        await self._async_start_iot(creds)
-        _LOGGER.debug("Govee credentials refreshed")
+            self._iot = None
+        try:
+            await self._async_start_iot(self._creds)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Govee IoT restart failed: %s", err)
+            self._mark_all_unavailable()
+            return
+        _LOGGER.debug("Govee IoT stream restarted (reauth=%s)", reauth)
+
+    async def _async_watchdog(self, _now) -> None:
+        """Detect a silently dead stream and recover it.
+
+        paho auto-reconnects on a clean disconnect, but a half-open socket can
+        stall without notice. Each tick we send a liveness poll; if nothing has
+        come back for STALE_AFTER we force a full reconnect (with re-auth, in
+        case the cert/token expired).
+        """
+        iot = self._iot
+        if iot is None:
+            return
+        age = iot.last_activity_age()
+        if age > STALE_AFTER.total_seconds():
+            _LOGGER.warning(
+                "No Govee IoT traffic for %.0fs; forcing reconnect", age
+            )
+            await self._async_restart_iot(reauth=True)
+            return
+        # Stream looks alive; nudge the gateway so states stay fresh.
+        await self.hass.async_add_executor_job(iot.poll_now)
+
+    async def async_poll_now(self) -> None:
+        """Manually request a fresh status dump from the gateway(s)."""
+        iot = self._iot
+        if iot is None:
+            return
+        published = await self.hass.async_add_executor_job(iot.poll_now)
+        if not published:
+            _LOGGER.debug("Refresh requested while disconnected; reconnecting")
+            await self._async_restart_iot(reauth=False)
 
     # -- threadsafe bridges (called from the paho thread) ----------------- #
     def _handle_readings_threadsafe(
@@ -146,10 +199,17 @@ class GoveeLeakRuntime:
             state.available = connected
             async_dispatcher_send(self.hass, f"{SIGNAL_AVAILABILITY}_{device}")
 
+    def _mark_all_unavailable(self) -> None:
+        """Flag every sensor unavailable (called from the HA loop)."""
+        self._handle_connection_threadsafe(False)
+
     async def async_shutdown(self) -> None:
         if self._cancel_reauth is not None:
             self._cancel_reauth()
             self._cancel_reauth = None
+        if self._cancel_watchdog is not None:
+            self._cancel_watchdog()
+            self._cancel_watchdog = None
         if self._iot is not None:
             await self.hass.async_add_executor_job(self._iot.stop)
             self._iot = None
