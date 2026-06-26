@@ -7,3 +7,4 @@ __pycache__/
 *.p12
 *.crt
 *.key
+govee_poll.py

@@ -5,11 +5,13 @@ handed back via a thread-safe callback (the runtime marshals onto the HA loop).
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import ssl
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 
 import paho.mqtt.client as mqtt
@@ -40,10 +42,12 @@ class GoveeIotClient:
         creds: GoveeCreds,
         on_readings: ReadingsCallback,
         on_connection: ConnectCallback | None = None,
+        poll_topics: list[str] | None = None,
     ) -> None:
         self._creds = creds
         self._on_readings = on_readings
         self._on_connection = on_connection
+        self._poll_topics = poll_topics or []
         self._client: mqtt.Client | None = None
         self._cert_file: str | None = None
         self._key_file: str | None = None
@@ -88,12 +92,38 @@ class GoveeIotClient:
         if rc == 0:
             client.subscribe(self._creds.topic, qos=0)
             _LOGGER.info("Connected to Govee IoT, subscribed to %s", self._creds.topic)
+            self._poll_status(client)
             if self._on_connection:
                 self._on_connection(True)
         else:
             _LOGGER.error("Govee IoT connect failed rc=%s", rc)
             if self._on_connection:
                 self._on_connection(False)
+
+    def _poll_status(self, client: mqtt.Client) -> None:
+        """Ask each gateway for a full status dump so all sensors populate.
+
+        On (re)connect the per-sensor states are otherwise unknown until each
+        battery sensor next transmits. Publishing a 'status' poll to the
+        gateway's command topic makes it broadcast a full dump on the account
+        topic, which we already receive.
+        """
+        for topic in self._poll_topics:
+            payload = json.dumps(
+                {
+                    "msg": {
+                        "cmd": "status",
+                        "cmdVersion": 0,
+                        "transaction": f"v_{int(time.time() * 1000)}000",
+                        "type": 0,
+                    }
+                }
+            )
+            try:
+                client.publish(topic, payload, qos=0)
+                _LOGGER.debug("Sent status poll to %s", topic)
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning("Failed to publish status poll to %s", topic)
 
     def _on_disconnect(self, _client, _userdata, rc) -> None:
         if not self._stop.is_set():

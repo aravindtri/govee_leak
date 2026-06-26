@@ -67,6 +67,7 @@ class LeakSensor:
     sno: int
     gateway_device: str
     gateway_sku: str
+    gateway_topic: str
     battery: int | None
 
 
@@ -90,6 +91,7 @@ def parse_leak_sensors(device_list: dict) -> list[LeakSensor]:
                 sno=int(sno) if sno is not None else -1,
                 gateway_device=gi.get("device", ""),
                 gateway_sku=gi.get("sku", ""),
+                gateway_topic=gi.get("topic", ""),
                 battery=ds.get("battery"),
             )
         )

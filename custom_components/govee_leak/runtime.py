@@ -82,10 +82,18 @@ class GoveeLeakRuntime:
         )
 
     async def _async_start_iot(self, creds: GoveeCreds) -> None:
+        poll_topics = sorted(
+            {
+                s.sensor.gateway_topic
+                for s in self.states.values()
+                if s.sensor.gateway_topic
+            }
+        )
         self._iot = GoveeIotClient(
             creds,
             on_readings=self._handle_readings_threadsafe,
             on_connection=self._handle_connection_threadsafe,
+            poll_topics=poll_topics,
         )
         # Building the SSL context (load_default_certs / load_cert_chain) is
         # blocking, so start the client in the executor.
